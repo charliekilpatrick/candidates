@@ -1,2 +1,1 @@
-# candidates
-GW Candidate Analysis
+# gwcandidates
