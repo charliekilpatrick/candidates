@@ -13,8 +13,8 @@ import numpy as np
 import astropy_healpix as ah
 from ligo.skymap import distance as lvc_distance
 
-def estimate_area(probability):
-            gw_map = 'data/S190814bv/GW190814_skymap.fits.gz'
+def estimate_area(probability, event):
+            gw_map = f'data/{event}/{event}_skymap.fits.gz'
             map_test = Table.read(gw_map)
 
             level, ipix = ah.uniq_to_level_ipix(map_test['UNIQ'])

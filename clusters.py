@@ -59,4 +59,4 @@ def get_all_tables(table_dir):
         photometry.append(phottabs)
     return(files, candidates, photometry)
 
-files, candidates, photometry = get_all_tables('/data/LCO/Swope/workstch/gw190814_gw190814tmpl/1')
+files, candidates, photometry = get_all_tables(sys.argv[1])

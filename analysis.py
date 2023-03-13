@@ -13,11 +13,10 @@ sys.path += ['/home/ckilpatrick/candidates/utilities']
 from listener import listener
 from utilities import *
 
-base_dir = '/data2/ckilpatrick/gw190814/candidates/data/'
-shibboleth = '/home/ckilpatrick/scripts/shibboleth'
-
-event = 'S190425z'
+event = sys.argv[1]
 redo=False
+
+shibboleth = '/home/ckilpatrick/scripts/shibboleth'
 
 # Constraints on candidates and search parameters
 constraints = {
@@ -53,7 +52,7 @@ tbl = {
 }
 
 # Directory structure and organization
-event_dir = base_dir+event+'/' ; tmp = base_dir+event+'/tmp'
+event_dir = event ; tmp = os.path.join(event, 'tmp')
 if not os.path.isdir(event_dir):
     try:
         os.makedirs(event_dir)
@@ -62,7 +61,7 @@ if not os.path.isdir(event_dir):
         print(error.format(event_dir))
         sys.exit()
 for key in tbl.keys():
-    tbl[key] = event_dir + tbl[key]
+    tbl[key] = os.path.join(event_dir, tbl[key])
 
 if True:
     gdb = listener('/home/ckilpatrick/scripts/shibboleth', tmp=tmp)
@@ -107,7 +106,10 @@ kwargs.update(constraints)
 steps = [import_candidates, check_time, check_prob, check_mpc, check_gaia,
     check_class, check_ps1dr2, check_asassn, check_redshift, check_photometry]
 
-internal=Table.read('data/S190814bv/internal_candidate_table', format='ascii')
+internal_candidate_file = os.path.join('data', event, 'internal_candidate_table')
+internal
+if os.path.exists(internal_candidate_file)
+    internal=Table.read(internal_candidate_file, format='ascii')
 prob=Table.read('prob_table.dat', format='ascii')
 
 table = None
