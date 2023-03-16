@@ -95,6 +95,11 @@ def sanitize_table(table, reformat_columns=False, reformat_z=False,
         col = [float(val)/2.998e5 for val in table['e_cz'].data]
         table.add_column(Column(col, name='z_err'))
 
+    # Fix issue that sometimes occurs with "name" column
+    for key in table.keys():
+        if 'name' in key:
+            table.rename_column(key, 'name')
+
 
     # Try to put the table into a standard format with a name, ra, dec, time,
     # spectroscopic class, and redshift column
@@ -282,15 +287,15 @@ def check_ps1dr2(coord, *args, **kwargs):
 
     return(catalog_data)
 
-def check_mpc(coord, time):
+def check_mpc(coord, transient_time, **kwargs):
         table_output = []
-        day = time.strftime('%d')
-        dayfloat = time.mjd % 1.0
+        day = transient_time.strftime('%d')
+        dayfloat = transient_time.mjd % 1.0
         day = day + '.' + str(dayfloat)[2:]
         # Hack AF
         url = 'https://minorplanetcenter.net/cgi-bin/mpcheck.cgi'
-        form_data = {"year":"%s" % time.strftime("%Y"),
-            "month":"%s" % time.strftime("%m"),
+        form_data = {"year":"%s" % transient_time.strftime("%Y"),
+            "month":"%s" % transient_time.strftime("%m"),
             "day":"%s" % day,
             "which":"pos",
             "ra":"%s" %
@@ -308,8 +313,9 @@ def check_mpc(coord, time):
             "needed":"f",
             "ps":"n",
             "type":"p"}
+
         r = requests.post(url, data=form_data)
-        soup = BeautifulSoup(r.text,'html5lib')
+        soup = BeautifulSoup(r.text,'lxml')
         pre = soup.find("pre")
         if pre is None:
             return(None)
@@ -613,7 +619,7 @@ def import_candidates(table, **kwargs):
         table = table['name','ra','dec','discovery_date']
 
         # If we want to import additional candidates from a separate file
-        if kwargs['internal']:
+        if kwargs['internal'] and os.path.exists(kwargs['internal']):
             additional_table = ascii.read(kwargs['internal'])
             additional_table = sanitize_table(additional_table)
 
@@ -634,80 +640,94 @@ def import_candidates(table, **kwargs):
                         table.add_row([row['name'], coord.ra.degree,
                             coord.dec.degree,' '.join(t.fits.split('T'))])
 
-        if kwargs['gw_map']:
-            gw_map = 'data/S190814bv/GW190814_skymap.fits.gz' #kwargs['gw_map']
-            map_test = Table.read(gw_map)
+        if kwargs['gw_map_url']:
+            if kwargs['gw_map'] is None:
+                filename = download_file(kwargs['gw_map_url'], cache=True)
+                prob, header = hp.read_map(filename, h=True)
+                gw_table = Table.read(kwargs['gw_map_url'])
+            else:
+                gw_map = kwargs['gw_map']
+                header = kwargs['gw_map_header']
+                gw_table = kwargs['gw_map_table']
 
-            level, ipix = ah.uniq_to_level_ipix(map_test['UNIQ'])
-            nside = ah.level_to_nside(level)
-            area_per_pix = hp.pixelfunc.nside2pixarea(nside, degrees=True)
+            probability=[]
+            nside = header['NSIDE']
 
-            hpx = map_test['PROBDENSITY']
+            sorted_pixels = np.flip(np.argsort(gw_map))
+            sorted_prob = np.flip(sorted(gw_map))
 
-            sorted_pixels = np.flip(np.argsort(hpx))
+            def ci(level, sorted_prob):
+                csum = 0
+                c = 0
+                index = 0
+                while csum < level:
+                    csum += sorted_prob[index]
+                    c = sorted_prob[index]
+                    index += 1
+                return csum, c, index
 
-            dist_map = map_test['DISTMU']
-            sigma_map = map_test['DISTSIGMA']
-            header = map_test.meta
+            c99sum, c99, index = ci(0.99, sorted_prob)
+
+            print('Largest probability pixel',gw_map[sorted_pixels[0]])
+            print('Smallest probability pixel',gw_map[sorted_pixels[-1]])
+
+            area_per_pix = hp.pixelfunc.nside2pixarea(header['NSIDE'],
+                degrees=True)
 
             total_prob = 0.0
             total_area = 0.0
+            least_prob = 0.0
             for i,pix in enumerate(sorted_pixels):
                 if total_prob > kwargs['probability']:
+                    least_prob = gw_map[pix]
                     break
                 else:
-                    total_prob += hpx[pix] * area_per_pix[pix] * (np.pi/180.0)**2
-                    total_area += area_per_pix[pix]
+                    total_prob += gw_map[pix]
+                    total_area += area_per_pix
 
-            m = 'Total area for {prob} probability is {area} deg^2'
-            print(m.format(prob=kwargs['probability'], area=total_area))
+            total_prob_str = '%1.6f'%total_prob
+            total_area_str = '%5.4f'%total_area
+            print(f'Total area for {total_prob_str} probability '+\
+                f'is {total_area_str} deg^2')
 
             # Add this information to the table metadata
             table.meta['gw_probability']=kwargs['probability']
             table.meta['gw_probability_area']=total_area
 
-            # Approximation of the maximum total probability (so we don't have
-            # to sum over every pixel across the entire sky)
-            approx = 0.999999999999
-
             # Create a list of cumulative sum of the value of pixels in hp map
             cumulative = np.zeros(len(sorted_pixels))
-
+            approx = 0.999999999999
             for i in np.arange(len(sorted_pixels)):
                 # Don't need to go beyond very low prob
                 if cumulative[sorted_pixels[i-1]] > approx:
                     cumulative[sorted_pixels[i:]] = 1.0
                     break
                 if i==0:
-                    cumulative[sorted_pixels[i]] = (hpx[sorted_pixels[i]] * area_per_pix[sorted_pixels[i]] * (np.pi/180.0)**2)
+                    cumulative[sorted_pixels[i]] = gw_map[sorted_pixels[i]]
                 else:
                     idx0 = sorted_pixels[i-1]
                     idx1 = sorted_pixels[i]
-                    cumulative[idx1] = cumulative[idx0] + (hpx[idx1] * area_per_pix[idx1] * (np.pi/180.0)**2)
+                    cumulative[idx1] = cumulative[idx0] + gw_map[idx1]
 
-            m = 'It took {steps} steps to calculate up to {approx} probability'
-            print(m.format(steps=i, approx=approx))
+            print(f'It took {i} steps to calculate up to {approx} probability')
 
-            # Now add candidate cumulative probability to the table
             probability = []
             for row in table:
                 coord = parse_coord(row['ra'], row['dec'])
 
-                ra = coord.ra
-                dec = coord.dec
+                ra = coord.ra.degree
+                dec = coord.dec.degree
 
-                match_ipix = ah.lonlat_to_healpix(ra, dec, nside, order='nested')
-                i = np.flatnonzero(ipix == match_ipix)[0]
+                theta = 0.5 * np.pi - np.deg2rad(dec)
+                phi = np.deg2rad(ra)
 
-                #phi = np.deg2rad(coord.ra.degree)
-                #theta = 0.5 * np.pi - np.deg2rad(coord.dec.degree)
-                #pix = hp.ang2pix(NSIDE, theta, phi)
+                ipix = hp.ang2pix(header['NSIDE'], theta, phi)
 
-                probability.append(cumulative[i])
+                probability.append(cumulative[ipix])
 
             table.add_column(Column(probability, name='2d_probability'))
 
-            table = add_distance_data(table, gw_map=gw_map,
+            table = add_distance_data(table, gw_map=gw_table, header=header,
                 table_name=kwargs['candidate'])
 
         # Write out the table with basic information
@@ -746,35 +766,31 @@ def check_class(table, **kwargs):
 
     return(table)
 
-def add_distance_data(table, gw_map='', table_name=''):
+def add_distance_data(table, gw_map='', header={}, table_name=''):
 
     if ('DL' not in table.keys() or 'DL_ERR' not in table.keys() and gw_map):
 
-        map_test = Table.read(gw_map)
+        dist_map = gw_map['DISTMU']
+        sigma_map = gw_map['DISTSIGMA']
 
-        dist_map = map_test['DISTMU']
-        sigma_map = map_test['DISTSIGMA']
+        nside = header['NSIDE']
 
-        level, ipix = ah.uniq_to_level_ipix(map_test['UNIQ'])
-        nside = ah.level_to_nside(level)
         area_per_pix = hp.pixelfunc.nside2pixarea(nside, degrees=True)
-
-        dist_map = map_test['DISTMU']
-        sigma_map = map_test['DISTSIGMA']
-        header = map_test.meta
 
         # Now add candidate cumulative probability to the table
         distance = [] ; dist_sigma = []
         for row in table:
             coord = parse_coord(row['ra'], row['dec'])
 
-            ra = coord.ra
-            dec = coord.dec
+            ra = coord.ra.degree
+            dec = coord.dec.degree
 
-            match_ipix = ah.lonlat_to_healpix(ra, dec, nside, order='nested')
-            i = np.flatnonzero(ipix == match_ipix)[0]
+            theta = 0.5 * np.pi - np.deg2rad(dec)
+            phi = np.deg2rad(ra)
 
-            dist, sigma = get_dist_sigma(dist_map, sigma_map, i)
+            ipix = hp.ang2pix(header['NSIDE'], theta, phi)
+
+            dist, sigma = get_dist_sigma(dist_map, sigma_map, ipix)
 
             distance.append(dist)
             dist_sigma.append(sigma)

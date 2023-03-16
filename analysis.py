@@ -6,14 +6,13 @@ from astropy.coordinates import SkyCoord
 from astropy.time import Time
 from astropy import units as u
 
-# Extending paths to include dependencies
-sys.path += ['/home/ckilpatrick/scripts/python/listener']
-sys.path += ['/home/ckilpatrick/candidates/utilities']
+from astropy.utils.data import download_file
+import healpy as hp # for working with HEALPix files
 
-from listener import listener
 from utilities import *
 
 event = sys.argv[1]
+yse_table = sys.argv[2]
 redo=False
 
 shibboleth = '/home/ckilpatrick/scripts/shibboleth'
@@ -52,7 +51,7 @@ tbl = {
 }
 
 # Directory structure and organization
-event_dir = event ; tmp = os.path.join(event, 'tmp')
+event_dir = os.path.join('data', event) ; tmp = os.path.join('data', event, 'tmp')
 if not os.path.isdir(event_dir):
     try:
         os.makedirs(event_dir)
@@ -63,25 +62,22 @@ if not os.path.isdir(event_dir):
 for key in tbl.keys():
     tbl[key] = os.path.join(event_dir, tbl[key])
 
-if True:
-    gdb = listener('/home/ckilpatrick/scripts/shibboleth', tmp=tmp)
-    event_file = event_dir+event+'.dat'
-    print(event_file)
-    if os.path.exists(event_file):
-        gdb.superevents = gdb.load_superevents(event_file=event_file)
-    else:
-        gdb.superevents = gdb.get_superevents(events=[event])
-        gdb.write_superevents(event_file=event_file)
-
-    idx, superevent = gdb.get_event_idx(gdb.superevents, event)
+url=f'https://gracedb.ligo.org/apiweb/superevents/{event}/files/LALInference.fits.gz'
+filename = download_file(url, cache=True)
+prob, header = hp.read_map(filename, h=True)
+header = dict(header)
+table = Table.read(url)
 
 # Storing event and analysis specific parameters
-kwargs = {'alert_time': Time(superevent['t_0'], format='gps'),
+kwargs = {'alert_time': Time(header['DATE-OBS']),
           'meta': [],
           'reference': None,
           'reference_name': '',
-          'yse': 31,
-          'gw_map': superevent['eventlink'],
+          'yse': yse_table,
+          'gw_map_url': url,
+          'gw_map': prob,
+          'gw_map_table': table,
+          'gw_map_header': header,
           'redo': redo,
           'avoid_filters': ['G','B','V','U','UVM2','UVW2',
                             'UVW1','orange','cyan','R'],
@@ -106,11 +102,17 @@ kwargs.update(constraints)
 steps = [import_candidates, check_time, check_prob, check_mpc, check_gaia,
     check_class, check_ps1dr2, check_asassn, check_redshift, check_photometry]
 
-internal_candidate_file = os.path.join('data', event, 'internal_candidate_table')
-internal
-if os.path.exists(internal_candidate_file)
+internal = None
+prob = None
+
+internal_candidate_file = os.path.join('data', event, 'internal_candidate_table.dat')
+probability_file = os.path.join('data',event,'prob_table.dat')
+
+if os.path.exists(internal_candidate_file):
     internal=Table.read(internal_candidate_file, format='ascii')
-prob=Table.read('prob_table.dat', format='ascii')
+
+if os.path.exists(probability_file):
+    prob=Table.read(probability_file, format='ascii')
 
 table = None
 masks = []
@@ -120,13 +122,13 @@ for i,proc in enumerate(steps):
     if i==0:
         for j,row in enumerate(table):
             if row['name'].startswith('SSS') or row['name'].startswith('TGW'):
-                if row['name'] not in internal['name']:
+                if internal and row['name'] not in internal['name']:
                     remove_rows.append(j)
     table.remove_rows(remove_rows)
     remove_rows=[]
     if i==0:
         for j,row in enumerate(table):
-            if row['name'] not in prob['name']:
+            if prob and row['name'] not in prob['name']:
                 remove_rows.append(j)
     table.remove_rows(remove_rows)
     if i>0:
@@ -136,7 +138,10 @@ for i,proc in enumerate(steps):
         mcopy = np.array([np.array([bool(f) for f in m]) for m in mcopy])
         mask = np.any(np.array(mcopy), axis=0)
         subtable=table[~mask]
-        subtable.write(format_proc(proc)+'_table.dat', format='ascii', overwrite=True)
+
+        outdatafile = os.path.join(event_dir, format_proc(proc)+'_table.dat')
+        subtable.write(outdatafile, format='ascii', overwrite=True)
+
     step_message(i, proc, get_kwargs(table, masks=masks))
 
 table.meta['use_masks']=masks
