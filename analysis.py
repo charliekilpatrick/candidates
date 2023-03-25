@@ -9,7 +9,7 @@ from astropy import units as u
 from astropy.utils.data import download_file
 import healpy as hp # for working with HEALPix files
 
-from utilities import *
+from utilities.utilities import *
 
 event = sys.argv[1]
 yse_table = sys.argv[2]
@@ -21,7 +21,8 @@ shibboleth = '/home/ckilpatrick/scripts/shibboleth'
 constraints = {
     'time': [0, 14] * u.day,     # Range in days for viable candidates
     'redshift_range': [0.0001, 0.35],
-    'probability': 0.9,         # Percentile range for viable candidates
+    'probability': 0.95,         # Percentile range for viable candidates
+    'distance_percentile': 0.95,
     'search_radius': {
         'mpc': 20.0 * u.arcsec,
         'gaia': 1.0 * u.arcsec,
@@ -62,11 +63,21 @@ if not os.path.isdir(event_dir):
 for key in tbl.keys():
     tbl[key] = os.path.join(event_dir, tbl[key])
 
-url=f'https://gracedb.ligo.org/apiweb/superevents/{event}/files/LALInference.fits.gz'
-filename = download_file(url, cache=True)
-prob, header = hp.read_map(filename, h=True)
-header = dict(header)
-table = Table.read(url)
+url=f'https://gracedb.ligo.org/api/superevents/{event}/files/LALInference.fits.gz'
+event_file = os.path.join(event_dir, event+'_LALInference.pkl')
+if os.path.exists(event_file):
+    data = pickle.load(event_file)
+    header = data['header']
+    prob = data['prob']
+    table = data['table']
+else:
+    filename = download_file(url, cache=True)
+    prob, header = hp.read_map(filename, h=True)
+    header = dict(header)
+    table = Table.read(url)
+
+    data = {'header': header, 'prob': prob, 'table': table}
+    pickle.dumps(event_file)
 
 # Storing event and analysis specific parameters
 kwargs = {'alert_time': Time(header['DATE-OBS']),
