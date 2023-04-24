@@ -599,6 +599,9 @@ def format_var(row, unique_filts, **kwargs):
             use_filt = filt
 
     if use_filt=='--':
+        return('--')
+
+    if use_filt=='--':
         data = [[float(row[filt+'_absmag_date']),
                  float(row[filt+'_absmag']),
                  float(row[filt+'_absmag_err'])] for filt in unique_filts]
@@ -633,7 +636,12 @@ def format_var(row, unique_filts, **kwargs):
 def output_latex_table(table, **kwargs):
     varnams = ['name','ra','dec','prob','date','z','var','note']
     table = add_name_len(table)
-    ufilts = table.meta['unique_filters']
+
+    if 'unique_filters' not in table.meta.keys():
+        ufilts = []
+    else:
+        ufilts = table.meta['unique_filters']
+
     if all([n in table.keys() for n in kwargs['outtable']['sort']]):
         table.sort(kwargs['outtable']['sort'])
 
@@ -1067,15 +1075,15 @@ def add_z(table, ref, procname, add_type, **kwargs):
 
 def check_redshift(table, **kwargs):
 
+    if kwargs['redshift']['methods'] is None:
+        return(table)
+
     for procname in kwargs['redshift']['methods']:
-        #if procname in table.keys():
-        #    continue
 
         m='\tREDSHIFT: {proc}'
         print(m.format(proc=procname.upper()))
 
         method = 'crossmatch'
-        #if procname=='spec': method = 'name'
 
         # Otherwise need to grab reference table and crossmatch
         if os.path.exists(kwargs[procname]):
@@ -1089,9 +1097,8 @@ def check_redshift(table, **kwargs):
 
         mask1 = reference['z'] > kwargs['redshift_range'][0]
         mask2 = reference['z'] < kwargs['redshift_range'][1]
-        #mask3 = reference['z'] / reference['z_err'] > 1.0
 
-        mask = mask1 & mask2 #& mask3
+        mask = mask1 & mask2
         reference = reference[mask]
 
         table = add_z(table, reference, procname, method, **kwargs)
