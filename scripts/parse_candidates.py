@@ -7,6 +7,7 @@ import string
 
 from requests.auth import HTTPBasicAuth
 
+import googleapiclient
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -22,8 +23,6 @@ from collections import Counter
 import numpy as np
 
 import hashlib
-
-from gw190425_sheets import *
 
 def transpose(l):
     return(list(map(list, zip(*l))))
@@ -122,7 +121,7 @@ def parse_names(table):
 
     return(unique_names)
 
-def parse_telescope_candidates(sheet, spreadsheetId):
+def parse_telescope_candidates(sheet, spreadsheetId, Nmin=2):
 
     table = get_websniff_data(sheet, spreadsheetId)
     names = parse_names(table)
@@ -163,7 +162,7 @@ def parse_telescope_candidates(sheet, spreadsheetId):
                 good_candidates[page] = unique(good_candidates[page],
                     keys=['candidate'], keep='last')
 
-            mask = good_candidates[page]['count']>1
+            mask = good_candidates[page]['count']>=Nmin
             for row in good_candidates[page][mask]:
                 # Masks out multiple candidates a second time, e.g., for google
                 # sheets pages where websniff pages are repeated for
@@ -188,6 +187,12 @@ def get_lightcurve_file(candidate_url, typ='unforced', verbose=True):
     lc_url = lc_url.replace(' ','')
 
     if 'http://' in lc_url: lc_url=lc_url.replace('http://','https://')
+    if not lc_url.startswith('http'): lc_url = 'http://'+lc_url
+
+    # Fix issue with index.html appearing in some STEP candidates
+    if 'index' in lc_url:
+        fieldname = lc_url.split('/')[-2]
+        lc_url = lc_url.replace('index', fieldname)
 
     if verbose: print(f'Trying to get: {lc_url}')
 
@@ -220,6 +225,8 @@ def parse_name(candidate, mjd, ra, dec):
         cand_name = 'TGW'
     elif 'andicam' in candidate:
         cand_name = 'AGW'
+    elif 'step' in candidate:
+        cand_name = 'STEP'
 
     date_str = Time(mjd, format='mjd').datetime.strftime('%Y')[2:]
     cand_name = cand_name+date_str
@@ -242,44 +249,87 @@ def parse_name(candidate, mjd, ra, dec):
 
     return(cand_name)
 
-sheet = initiate_gsheet(os.environ['GSHEET_TOKEN_FILE'])
+def parse_candidate_data(table, checklcerror=True):
 
-table = None
-for key in all_sheets.keys():
-    new = parse_telescope_candidates(sheet, all_sheets[key])
-    if not table:
-        table = new
+    outtable = Table([['X'*100],[0.],[0.],[0.],['X'*10],[0.],[0.],
+        ['X'*100]], names=('name','mjd','ra','dec','filter','mag','mag_err',
+        'candidate_url')).copy()[:0]
+
+    for row in table:
+        lc = get_lightcurve_file(row['candidate'], verbose=True)
+
+        if lc is None and checklcerror:
+            print(checklcerror)
+            cand=row['candidate']
+            raise Exception(f'ERROR: could not download lc file for {cand}')
+        elif lc is None:
+            continue
+
+        lc.sort('MJD')
+        lc = lc[0]
+        name = parse_name(row['candidate'], lc['MJD'], lc['ra'], lc['dec'])
+
+        coord = SkyCoord(lc['ra'], lc['dec'], unit=(u.hour, u.deg))
+
+        if '-' in str(lc['m']):
+            mag = 0.0
+        else:
+            mag = float(lc['m'])
+
+        if '-' in str(lc['dm']):
+            dmag = 0.0
+        else:
+            dmag = float(lc['dm'])
+
+        outtable.add_row([name, lc['MJD'], coord.ra.degree,
+            coord.dec.degree, lc['filt'], mag, dmag, row['candidate']])
+
+    return(outtable)
+
+
+def add_options():
+    import argparse
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--sheets", nargs='+', type=str, default=None, 
+        help="List of google spreadsheet IDs from which to grab candidates.")
+    parser.add_argument("--gsheets-token-file", type=str, default='',
+        help="A file containing the google sheets token needed for API.")
+    parser.add_argument("--Nmin","--Nmin-sniff", type=int, default=2,
+        help="Minimum number of people to sniff a source to elevate to candidate.")
+    parser.add_argument("--url-file", type=str, default='',
+        help="An input file parseable by ascii.read with candidate ID URLs.")
+    parser.add_argument("--no-lc-error", default=False, action='store_true',
+        help="Ignore errors from failure to download a light curve file.")
+    parser.add_argument("--outfile", default='candidates.csv', type=str,
+        help="Name out of the output candidates file.")
+
+    args = parser.parse_args()
+
+    return(args)
+
+if __name__ == "__main__":
+    args = add_options()
+
+    table = None
+    if args.sheets and args.gsheets_token_file:
+        sheet = initiate_gsheet(args.gsheets_token_file)
+
+        for spreadsheetId in args.sheets:
+            new = parse_telescope_candidates(sheet, spreadsheetId, 
+                Nmin=args.Nmin)
+            if not table:
+                table = new
+            else:
+                table = vstack([table, new])
+
+    elif args.url_file:
+        table = ascii.read(args.url_file)
+        if 'webpage' in table.keys():
+            table.rename_column('webpage', 'candidate')
     else:
-        table = vstack([table, new])
+        raise Exception('ERROR: must provide sheets and token, or URL file!')
 
-out_candidate_table = Table([['X'*100],[0.],[0.],[0.],['X'*10],[0.],[0.],
-    ['X'*100]], names=('name','mjd','ra','dec','filter','mag','mag_err',
-    'candidate_url')).copy()[:0]
-for row in table:
-    lc = get_lightcurve_file(row['candidate'], verbose=True)
-
-    if lc is None:
-        cand=row['candidate']
-        raise Exception(f'ERROR: could not download lc file for {cand}')
-
-    lc.sort('MJD')
-    lc = lc[0]
-    name = parse_name(row['candidate'], lc['MJD'], lc['ra'], lc['dec'])
-
-    coord = SkyCoord(lc['ra'], lc['dec'], unit=(u.hour, u.deg))
-
-    if '-' in str(lc['m']):
-        mag = 0.0
-    else:
-        mag = float(lc['m'])
-
-    if '-' in str(lc['dm']):
-        dmag = 0.0
-    else:
-        dmag = float(lc['dm'])
-
-    out_candidate_table.add_row([name, lc['MJD'], coord.ra.degree,
-        coord.dec.degree, lc['filt'], mag, dmag, row['candidate']])
-
-out_candidate_table.write('gw190425_candidates.csv', format='csv',
-    overwrite=True)
+    checklcerror = not args.no_lc_error
+    outtable = parse_candidate_data(table, checklcerror=checklcerror)
+    outtable.write(args.outfile, format='csv', overwrite=True)
