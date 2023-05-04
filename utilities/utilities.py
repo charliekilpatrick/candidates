@@ -7,13 +7,16 @@ from astropy.cosmology import Planck15 as cosmo
 from astropy import units as u
 from bs4 import BeautifulSoup
 from scipy.optimize import curve_fit
-import copy, sys, requests, os, time, pandas, progressbar, pickle, glob
+import copy, sys, requests, os, time, pandas, progressbar, pickle, glob, shutil
+import subprocess
 import healpy as hp
 import numpy as np
 import astropy_healpix as ah
 from ligo.skymap import distance as lvc_distance
 from astroquery.ned import Ned
 from astroquery.vizier import Vizier
+from collections import OrderedDict
+import json
 
 Vizier.ROW_LIMIT = -1
 
@@ -101,7 +104,7 @@ def sanitize_table(table, reformat_columns=False, reformat_z=False,
 
     # Fix issue that sometimes occurs with "name" column
     for key in table.keys():
-        if 'name' in key:
+        if 'name' in key and 'name' not in table.keys():
             table.rename_column(key, 'name')
 
 
@@ -166,7 +169,124 @@ def get_legacy_file(coord, *args):
     file = file_fmt.format(ra_min=str(ra_min).zfill(3),
         ra_max=str(ra_max).zfill(3), dec_min=str(dec_min).zfill(3),
         dec_max=str(dec_max).zfill(3), sign=sign)
+
     return(file)
+
+def setup_astcheck(**kwargs):
+    files={'ELEMENTS.COMET':'https://ssd.jpl.nasa.gov/dat/ELEMENTS.COMET',
+     'MPCORB.DAT':'https://minorplanetcenter.net/iau/MPCORB/MPCORB.DAT',
+     'ObsCodes.html':'http://www.minorplanetcenter.org/iau/lists/ObsCodes.html'}
+
+    data_dir = kwargs['data_dir']
+
+    for file in files.keys():
+        fullfilename = os.path.join(data_dir, file)
+        if os.path.exists(fullfilename) and not os.path.exists(file):
+            shutil.copyfile(fullfilename, file)
+
+        if not os.path.exists(file):
+            file_url=files[file]
+            print(f'Downloading {file}...')
+            cmd=f'wget {file_url} > /dev/null 2> /dev/null'
+            os.system(cmd)
+
+            if not os.path.exists(file):
+                raise Exception(f'ERROR: {file} does not exist!')
+            else:
+                shutil.copyfile(file, fullfilename)
+
+    if not os.path.exists('mpcorb.sof'):
+        os.system('mpc2sof')
+
+def check_astcheck(coord, transient_time, *args, **kwargs):
+
+    setup_astcheck(**kwargs)
+
+    mjd = transient_time.mjd
+    ra = coord.ra.degree
+    dec = coord.dec.degree
+
+    obscode = kwargs['obscode']
+    radius = kwargs['search_radius']['astcheck'].to_value('arcsec')
+
+    cmd = f'astcheck -c "mjd {mjd}" {ra} {dec} {obscode} -r {radius}'
+    p = subprocess.run(cmd, shell=True, capture_output=True)
+
+    for file in glob.glob('astcheck*.tmp'):
+        os.remove(file)
+    for file in glob.glob('*.chk'):
+        os.remove(file)
+
+    output = p.stdout.decode()
+    output = output.split('\n')
+    data=output[4:-9]
+
+    if len(data)==0:
+        return(None)
+
+    newdata=[]
+    for d in data:
+        name=d[:26]
+        name=name.strip()
+        rest=','.join(d[26:].split())
+        newdata.append(name+','+rest)
+
+    table = ascii.read(newdata,delimiter=',',
+        names=('name','ra','dec','mag','dra','ddec'))
+
+    return(table)
+
+def get_tns_header(kwargs):
+
+    bot_id = kwargs['tns']['bot_id']
+    bot_name = kwargs['tns']['bot_name']
+
+    tns_marker = 'tns_marker{"tns_id": "'+bot_id
+    tns_marker += '", "type": "bot", "name": "'+bot_name+'"}'
+
+    headers = {'User-Agent': tns_marker}
+
+    return(headers)
+
+def check_tns(coord, *args, **kwargs):
+
+    headers = get_tns_header(kwargs)
+
+    radius = kwargs['search_radius']['tns'].to_value('arcsec')
+    ra, dec = coord.to_string(style='hmsdms', sep=':', precision=3).split()
+    data = {'ra': ra, 'dec': dec, 'radius': str(radius)}
+
+    json_file=OrderedDict(data)
+    post_data=[('api_key',(None, kwargs['tns']['api_key'])),
+               ('data',(None,json.dumps(json_file)))]
+
+    url='https://www.wis-tns.org/api/get/search'
+
+    response=requests.post(url, headers=headers, files=post_data)
+
+    table = Table([['X'*100],[0.],[0.]],names=('name','ra','dec')).copy()[:0]
+    for i in np.arange(3):
+        if response.status_code==200:
+            out=json.loads(response.content)
+            if len(out['data']['reply'])>0:
+                for obj in out['data']['reply']:
+                    table.add_row([obj['objname'],coord.ra.degree,
+                        coord.dec.degree])
+            break
+        elif response.status_code==429:
+            # Probably just got a timeout from the API
+            time.sleep(60)
+        else:
+            print(response.content)
+            print(response.status_code)
+            raise Exception('ERROR: bad status code from TNS API!')
+
+    return(table)
+
+def check_yse(coord, *args, **kwargs):
+
+    table = download_yse('45')
+    return(table)
 
 def search_legacy_files(coord, *args, radius=30 * u.arcsec,
     base_dir='/data/Legacy/photoz'):
@@ -327,12 +447,15 @@ def get_css(ra, dec, radius):
 
 def check_ps1dr2(coord, *args, **kwargs):
 
-    radius = kwargs['search_radius']['ps1dr2'].to_value('degree')/36.
+    radius = kwargs['search_radius']['ps1dr2'].to_value('degree')
     region = '{0} {1}'.format(coord.ra.degree, coord.dec.degree)
 
     from astroquery.mast import Catalogs
-    catalog_data = Catalogs.query_region(region, radius=radius,
-        catalog='Panstarrs',data_release='dr2',table='detections')
+    try:
+        catalog_data = Catalogs.query_region(region, radius=radius,
+            catalog='Panstarrs',data_release='dr2',table='detection')
+    except KeyError:
+        return(None)
 
     catalog_data = sanitize_table(catalog_data, reformat_columns=True)
 
@@ -469,6 +592,11 @@ def get_2mass_redshift(coord, *args, radius=300*u.arcsec, **kwargs):
 def build_meta_table(table, typ, r=30.0 * u.arcsec):
     methods={'legacy': search_legacy_files, 'ps1strm': get_ps1strm,
         'spec': search_spectroscopic_redshift, '2mpz': get_2mass_redshift}
+
+    if typ=='yse':
+        table = download_yse('45')
+        return(table)
+
     meta_table = None
     bar = progressbar.ProgressBar(maxval=len(table))
     bar.start()
@@ -518,7 +646,8 @@ def format_redshift(row, **kwargs):
     else:
         return(out)
 
-    if 'mpc_mask' in row.colnames and row['mpc_mask']:
+    if (('mpc_mask' in row.colnames and row['mpc_mask']) or
+        ('astcheck_mask' in row.colnames and row['astchec_mask'])):
         return('--')
 
     if row[use_name]!='--':
@@ -570,9 +699,14 @@ def format_note(row, unique_filters, **kwargs):
         note='(SN) '+row['classification'].replace('SN','').strip()
     elif 'mpc_mask' in row.colnames and row['mpc_mask']:
         note='(MP) '+row['mpc']
-        z='--'
+    elif 'astcheck_mask' in row.colnames and row['astcheck_mask']:
+        note='(MP) '+row['astcheck']
+    elif 'gaia_mask' in row.colnames and row['gaia_mask']:
+        note='(GAIA) '+row['gaia']
     elif 'redshift_mask' in row.colnames and row['redshift_mask']:
         note='(Z)'
+    elif 'tns_mask' in row.colnames  and row['tns'] and str(row['tns'])!='--':
+        note='(TNS) '+row['tns']
     elif 'absmag_mask' in row.colnames and row['absmag_mask']:
         note = '(PHOT; bright)'
     elif 'var_mask' in row.colnames and row['var_mask']:
@@ -589,7 +723,8 @@ def format_note(row, unique_filters, **kwargs):
 def format_var(row, unique_filts, **kwargs):
     var='--'
 
-    if row['mpc_mask']:
+    if (('mpc_mask' in row.colnames and row['mpc_mask']) or
+        ('astcheck_mask' in row.colnames and row['astcheck_mask'])):
         return(var)
 
     # Pick which filter to use for absolute magnitude
@@ -635,6 +770,10 @@ def format_var(row, unique_filts, **kwargs):
 
 def output_latex_table(table, **kwargs):
     varnams = ['name','ra','dec','prob','date','z','var','note']
+
+    if '2d_probability' not in table.keys():
+        varnams.remove('prob')
+
     table = add_name_len(table)
 
     if 'unique_filters' not in table.meta.keys():
@@ -678,9 +817,64 @@ def output_latex_table(table, **kwargs):
     hdr={}
     for key in varnams: hdr[key]=key.upper()
     print('\n\n'+out_fmt.format(**hdr)+'\n\n')
-    for data in all_data:
-        output = out_fmt.format(**data)
-        print(output + '\\\\')
+    with open('output.tex', 'w') as outfile:
+        for data in all_data:
+            output = out_fmt.format(**data)
+            print(output + '\\\\')
+            outfile.write(output+'\\\\ \n')
+
+def output_candidate_table(table, **kwargs):
+
+    varnams = ['name','note','url']
+
+    if '2d_probability' not in table.keys():
+        varnams.remove('prob')
+
+    table = add_name_len(table)
+
+    if 'unique_filters' not in table.meta.keys():
+        ufilts = []
+    else:
+        ufilts = table.meta['unique_filters']
+
+    if all([n in table.keys() for n in kwargs['outtable']['sort']]):
+        table.sort(kwargs['outtable']['sort'])
+
+    # Mask the table to only include things that pass time and prob cuts
+    if 'prob_mask' in table.keys() and 'time_mask' in table.keys():
+        mask = ~table['prob_mask'] & ~table['time_mask']
+        table = table[mask]
+
+    all_data = []
+    for row in table:
+
+        # Format coordinate
+        data = {}
+        for var in varnams:
+            var = var.strip()
+            if var=='name': data[var] = row[var]
+            if var=='url':  data[var] = row['candidate_url']
+            if var=='note': data[var] = format_note(row, ufilts, **kwargs)
+
+        all_data.append(data)
+
+    lens = [10]*len(varnams)
+    for i,var in enumerate(varnams):
+        var = var.strip()
+        max_length = np.max([len(str(dat[var])) for dat in all_data])
+        lens[i] = max_length
+
+    out_fmt = ','.join(['{'+v+': <'+str(l)+'}' for v,l in zip(varnams, lens)])
+
+    hdr={}
+    for key in varnams: hdr[key]=key.upper()
+    print('\n\n'+out_fmt.format(**hdr)+'\n')
+    with open('output.csv', 'w') as outfile:
+        for data in all_data:
+            output = out_fmt.format(**data)
+            print(output)
+            outfile.write(output+'\n')
+
 
 def get_dist_sigma(dist_map, sigma_map, pix):
     d = dist_map[pix]
@@ -701,12 +895,15 @@ def download_yse(yse):
     for key in table.keys():
         table.rename_column(key, key.lower())
 
+    all_keys = list(table.keys())
+
     use_key = None
     for key in ['spec_class','classification','class']:
-        if key in table.keys():
+        if key in all_keys:
             use_key = key
             break
 
+    # Get rid of FRBs in analysis
     if use_key is not None:
         mask = table[use_key]!='FRB'
         table = table[mask]
@@ -716,7 +913,7 @@ def download_yse(yse):
         if 'transient_dec' in key.lower(): table.rename_column(key, 'dec')
         if 'disc_date' in key.lower(): table.rename_column(key, 'discovery_date')
         if 'spec_class' in key.lower(): table.rename_column(key, 'classification')
-        if 'name' in key.lower(): table.rename_column(key, 'name')
+        if 'name' in key.lower() and 'name' not in all_keys: table.rename_column(key, 'name')
 
     return(table)
 
@@ -745,9 +942,20 @@ def import_candidates(table, **kwargs):
     table_name = kwargs['candidate']
 
     if not os.path.exists(table_name) or kwargs['redo']:
-        table = download_yse(kwargs['yse'])
+        if isinstance(kwargs['yse'], Table):
+            table = kwargs['yse']
+        elif isinstance(kwargs['yse'], str):
+            # Assume it is a URL and try to download
+            table = download_yse(kwargs['yse'])
+        else:
+            data = kwargs['yse']
+            raise Exception(f'ERROR: invalid input format {data}')
+
         table = sanitize_table(table, reformat_columns=True, reformat_z=True)
-        table = table['name','ra','dec','discovery_date']
+        columns = ['name','ra','dec','discovery_date']
+        if 'candidate_url' in table.keys():
+            columns.append('candidate_url')
+        table = table[columns]
 
         # If we want to import additional candidates from a separate file
         if kwargs['internal'] and os.path.exists(kwargs['internal']):
@@ -771,7 +979,7 @@ def import_candidates(table, **kwargs):
                         table.add_row([row['name'], coord.ra.degree,
                             coord.dec.degree,' '.join(t.fits.split('T'))])
 
-        if kwargs['gw_map_url']:
+        if 'gw_map_url' in kwargs.keys() and kwargs['gw_map_url']:
             if kwargs['gw_map'] is None:
                 filename = download_file(kwargs['gw_map_url'], cache=True)
                 prob, header = hp.read_map(filename, h=True)
@@ -866,6 +1074,16 @@ def import_candidates(table, **kwargs):
 
     else:
         table = ascii.read(table_name)
+        orig_table = kwargs['yse']
+
+        for varname in ['name','ra','dec','discovery_date','candidate_url']:
+            if varname not in table.keys() and varname in orig_table.keys():
+                data = []
+                for row in table:
+                    mask = orig_table['name']==row['name']
+                    data.append(orig_table[mask][0][varname])
+                table.add_column(Column(data, name=varname))
+
 
     return(table)
 
@@ -1126,7 +1344,7 @@ def add_data(table, proc, **kwargs):
         # Load asynchronous data if we need to
         if kwargs['reference_name'] and not reftable:
             if os.path.exists(kwargs['reference_name']):
-                rreftable = ascii.read(kwargs['reference_name'])
+                reftable = ascii.read(kwargs['reference_name'])
             else:
                 radius = kwargs['search']
                 reftable = build_meta_table(table, proc, r=radius)
@@ -1144,16 +1362,25 @@ def add_data(table, proc, **kwargs):
             coord = parse_coord(row['ra'], row['dec'])
 
             if reftable:
-                reference = reftable
+                reference = copy.copy(reftable)
             else:
                 reference = proc(coord, discovery_time, **kwargs)
+                # For YSE, we only need a single reference table, so just pass
+                # to the reftable variable
+                reftable = copy.copy(reference)
+
+            if reference is not None:
+                if 'sep' in reference.keys():
+                    reference.remove_column('sep')
 
             best_match = None
             if reference:
                 radius = kwargs['search_radius'][procname]
-                coords = parse_coord(reference['ra'], reference['dec'])
-                separation = [c.separation(coord).degree for c in coords]
-                separation = np.array(separation)
+                if is_number(reference['ra'][0]) and is_number(reference['dec'][0]):
+                    coords = SkyCoord(reference['ra'], reference['dec'], unit='deg')
+                else:
+                    coords = np.array(parse_coord(reference['ra'], reference['dec']))
+                separation = coord.separation(coords).degree
                 match =  separation < radius.to_value('degree')
 
                 if len(reference[match])>0:
@@ -1166,7 +1393,7 @@ def add_data(table, proc, **kwargs):
                 name_keys = ['name','DESIGNATION','source_id']
                 use_name = ''
                 for n in name_keys:
-                    if n in b.keys():
+                    if n in b.colnames:
                         use_name = n
                 if not use_name:
                     print(b)
@@ -1360,12 +1587,18 @@ def get_kwargs(table, masks=[]):
 
 def get_distance_modulus(row, avoid_mpc=True, typ='spec'):
 
-    if (avoid_mpc and row['mpc_mask']) or typ=='--':
-        if 'dl' in row.colnames and 'dl_err' in row.colnames:
-            # dl and dl_err in units of Mpc
-            dm = 5*np.log10(row['dl'])+25.0
-            dm_err = 2.171472 * row['dl_err']/row['dl']
-            return(dm, dm_err)
+    use_dl = False
+    if typ=='--': use_dl = True
+
+    if (avoid_mpc and (('mpc_mask' in row.colnames and row['mpc_mask']) or 
+        ('astcheck_mask' in row.colnames and row['astcheck_mask']))):
+        use_dl = True
+
+    if use_dl and 'dl' in row.colnames and 'dl_err' in row.colnames:
+        # dl and dl_err in units of Mpc
+        dm = 5*np.log10(row['dl'])+25.0
+        dm_err = 2.171472 * row['dl_err']/row['dl']
+        return(dm, dm_err)
 
     if '_z' not in typ:
         typ=typ+'_z'
