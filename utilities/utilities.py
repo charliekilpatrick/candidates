@@ -457,6 +457,11 @@ def check_ps1dr2(coord, *args, **kwargs):
     except KeyError:
         return(None)
 
+    # This masks for rows where the corresponding source was fit with PSFMODEL
+    # i.e., the source was classified as point-like
+    mask = np.array([int(c['infoFlag'])%2==1 for c in catalog_data])
+    catalog_data = catalog_data[mask]
+
     catalog_data = sanitize_table(catalog_data, reformat_columns=True)
 
     return(catalog_data)
