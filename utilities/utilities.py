@@ -704,7 +704,7 @@ def format_note(row, unique_filters, **kwargs):
     elif 'gaia_mask' in row.colnames and row['gaia_mask']:
         note='(GAIA) '+row['gaia']
     elif 'ps1dr2_mask' in row.colnames and row['ps1dr2_mask']:
-        note='(PS1) '+row['ps1dr2']
+        note='(PS1) '+str(row['ps1dr2'])
     elif 'redshift_mask' in row.colnames and row['redshift_mask']:
         note='(Z)'
     elif 'tns_mask' in row.colnames  and row['tns'] and str(row['tns'])!='--':
