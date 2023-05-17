@@ -703,6 +703,8 @@ def format_note(row, unique_filters, **kwargs):
         note='(MP) '+row['astcheck']
     elif 'gaia_mask' in row.colnames and row['gaia_mask']:
         note='(GAIA) '+row['gaia']
+    elif 'ps1dr2_mask' in row.colnames and row['ps1dr2_mask']:
+        note='(PS1) '+row['ps1dr2']
     elif 'redshift_mask' in row.colnames and row['redshift_mask']:
         note='(Z)'
     elif 'tns_mask' in row.colnames  and row['tns'] and str(row['tns'])!='--':
@@ -1395,9 +1397,11 @@ def add_data(table, proc, **kwargs):
                 for n in name_keys:
                     if n in b.colnames:
                         use_name = n
+                        break
                 if not use_name:
                     print(b)
                     raise Exception('ERROR: could not find name key')
+
                 coldata.append([True,str(b[use_name]).strip(),b['ra'],b['dec']])
             else:
                 coldata.append([False, '--', np.nan, np.nan])

@@ -5,6 +5,7 @@
 *.COMET
 *.sof
 *.html
+*.tex
 .DS_Store
 __pycache__/
 
