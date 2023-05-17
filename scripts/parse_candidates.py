@@ -252,11 +252,13 @@ def parse_name(candidate, mjd, ra, dec):
 def parse_candidate_data(table, checklcerror=True):
 
     outtable = Table([['X'*100],[0.],[0.],[0.],['X'*10],[0.],[0.],
-        ['X'*100]], names=('name','mjd','ra','dec','filter','mag','mag_err',
-        'candidate_url')).copy()[:0]
+        ['X'*100],['X'*100],['X'*100],['X'*100],['X'*100]], 
+        names=('name','mjd','ra','dec','filter','mag','mag_err',
+            'diffim','science','template','cmpfile','candidate_url')).copy()[:0]
 
     for row in table:
-        lc = get_lightcurve_file(row['candidate'], verbose=True)
+        candidate = row['candidate']
+        lc = get_lightcurve_file(candidate, verbose=True)
 
         if lc is None and checklcerror:
             print(checklcerror)
@@ -265,9 +267,29 @@ def parse_candidate_data(table, checklcerror=True):
         elif lc is None:
             continue
 
+        if 'nickel' in candidate.lower():
+            cand_name = 'Nickel'
+        elif 'swope' in candidate.lower():
+            cand_name = 'Swope'
+        elif 'thacher' in candidate.lower():
+            cand_name = 'Thacher'
+        elif 'andicam-ir' in candidate.lower():
+            cand_name = 'ANDICAMIR'
+        elif 'andicam-ccd' in candidate.lower():
+            cand_name = 'ANDICAMCCD'
+        elif 'step' in candidate.lower():
+            cand_name = 'STEP'
+        else:
+            raise Exception(f'ERROR: unrecognized telescope in {candidate}')
+
         lc.sort('MJD')
         lc = lc[0]
         name = parse_name(row['candidate'], lc['MJD'], lc['ra'], lc['dec'])
+
+        cmpfile = os.path.join(cand_name, os.path.basename(lc['cmpfile']))
+        diffim = cmpfile.replace('.cut.dcmp','.fits')
+        science = cmpfile.replace('.cut.dcmp','.im.fits')
+        template = cmpfile.replace('.cut.dcmp','.tmpl.fits')
 
         coord = SkyCoord(lc['ra'], lc['dec'], unit=(u.hour, u.deg))
 
@@ -282,10 +304,62 @@ def parse_candidate_data(table, checklcerror=True):
             dmag = float(lc['dm'])
 
         outtable.add_row([name, lc['MJD'], coord.ra.degree,
-            coord.dec.degree, lc['filt'], mag, dmag, row['candidate']])
+            coord.dec.degree, lc['filt'], mag, dmag, 
+            diffim, science, template, cmpfile,
+            row['candidate']])
 
     return(outtable)
 
+def mk_regfile(coord, filename, radius=5.0):
+
+    with open(filename, 'w') as f:
+        f.write('# Region file format: DS9 version 4.1 \n')
+        f.write('global color=green dashlist=8 3 width=1 ')
+        f.write('font="helvetica 10 normal roman" select=1 highlite=1 dash=0 ')
+        f.write('fixed=0 edit=1 move=1 delete=1 include=1 source=1 \n')
+        f.write('fk5 \n')
+
+        ra = coord.ra.degree ; dec = coord.dec.degree
+        f.write(f'circle({ra},{dec},{radius}") \n')
+
+
+def output_ds9(table):
+
+    cmd_file = open('do_ds9.sh','w')
+    if not os.path.exists('regfiles'):
+        os.makedirs('regfiles')
+
+    for row in table:
+
+        url = row['candidate_url']
+        cmd_file.write(f'echo "{url}" \n')
+
+        cmd = 'ds9 '
+
+        tmpl = row['template'] ; sci = row['science'] ; diff = row['diffim']
+
+        cmd += f'{tmpl} {sci} {diff} '
+        
+        regfile = os.path.join('regfiles', 
+            os.path.basename(diff).replace('.fits','.reg'))
+        coord = SkyCoord(row['ra'], row['dec'], unit='deg')
+
+        mk_regfile(coord, regfile)
+
+        cmd += f'-region load all {regfile} '
+
+        hmsdms = coord.to_string(style='hmsdms', sep=':', precision=2)
+
+        cmd += f'-pan to {hmsdms} wcs icrs '
+        cmd += '-zoom to 2 2 '
+        cmd += '-lock frame wcs '
+        cmd += '-scale mode 99.5 -align yes -single '
+        cmd += '-cmap invert yes -wcs align yes '
+
+        cmd += '\n'
+        cmd_file.write(cmd)
+
+    cmd_file.close()
 
 def add_options():
     import argparse
@@ -303,6 +377,8 @@ def add_options():
         help="Ignore errors from failure to download a light curve file.")
     parser.add_argument("--outfile", default='candidates.csv', type=str,
         help="Name out of the output candidates file.")
+    parser.add_argument("--output-ds9", default=False, action='store_true',
+        help="Output ds9 region files and commands to view candidate images.")
 
     args = parser.parse_args()
 
@@ -332,4 +408,8 @@ if __name__ == "__main__":
 
     checklcerror = not args.no_lc_error
     outtable = parse_candidate_data(table, checklcerror=checklcerror)
+
+    if args.output_ds9:
+        output_ds9(outtable)
+
     outtable.write(args.outfile, format='csv', overwrite=True)
