@@ -205,6 +205,10 @@ def parse_steps(args):
         if 'import' in step:
             out_steps.append(util.import_candidates)
         elif 'time' in step:
+            if not args.gw_event and not args.cut_time:
+                raise Exception('ERROR: you must pass a GW event name '+\
+                    '(--gw-event) or a cut time (--cut-time) to perform '+\
+                    'the time step.')
             out_steps.append(util.check_time)
         elif 'prob' in step:
             out_steps.append(util.check_prob)
