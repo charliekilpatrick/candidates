@@ -1,2 +1,0 @@
-name ra dec discovery_date candidate_url 2d_probability dl dl_err ps1dr2 ps1dr2_ra ps1dr2_dec time_mask prob_mask ps1dr2_mask
-TGW19vpycqzqc 263.10039166666667 3.2958499999999997 2019-04-26T11:12:45 http://ziggy.ucolick.org/gw/Thacher/sniff/2019/GW190425_GW190425tmplCO1/1/t005aae47622_1.GW190425_1.1/t005aae47622_1.GW190425_1.1.html#12 0.29913887422221713 151.46832317979735 42.68648184417993 111952631003065232 263.10035077 3.295703 False False True

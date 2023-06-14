@@ -451,11 +451,11 @@ def check_ps1dr2(coord, *args, **kwargs):
     region = '{0} {1}'.format(coord.ra.degree, coord.dec.degree)
 
     from astroquery.mast import Catalogs
-    try:
+    if True:
         catalog_data = Catalogs.query_region(region, radius=radius,
             catalog='Panstarrs',data_release='dr2',table='detection')
-    except KeyError:
-        return(None)
+    #except KeyError:
+    #    return(None)
 
     # This masks for rows where the corresponding source was fit with PSFMODEL
     # i.e., the source was classified as point-like
@@ -1317,16 +1317,18 @@ def check_redshift(table, **kwargs):
         else:
             reference = build_meta_table(table, procname,
                 r=kwargs['search_radius']['galaxy'])
-            reference = sanitize_table(reference, reformat_columns=True)
-            reference.write(kwargs[procname], format='ascii', overwrite=True)
+            if reference is not None:
+                reference = sanitize_table(reference, reformat_columns=True)
+                reference.write(kwargs[procname], format='ascii', overwrite=True)
 
-        mask1 = reference['z'] > kwargs['redshift_range'][0]
-        mask2 = reference['z'] < kwargs['redshift_range'][1]
+        if reference is not None:
+            mask1 = reference['z'] > kwargs['redshift_range'][0]
+            mask2 = reference['z'] < kwargs['redshift_range'][1]
 
-        mask = mask1 & mask2
-        reference = reference[mask]
+            mask = mask1 & mask2
+            reference = reference[mask]
 
-        table = add_z(table, reference, procname, method, **kwargs)
+            table = add_z(table, reference, procname, method, **kwargs)
 
     table = pick_best_redshift(table, **kwargs)
 
@@ -1368,7 +1370,7 @@ def add_data(table, proc, **kwargs):
             discovery_time = Time(row['discovery_date'])
             coord = parse_coord(row['ra'], row['dec'])
 
-            if reftable:
+            if reftable and procname not in kwargs['redo_reference']:
                 reference = copy.copy(reftable)
             else:
                 reference = proc(coord, discovery_time, **kwargs)
@@ -1381,12 +1383,15 @@ def add_data(table, proc, **kwargs):
                     reference.remove_column('sep')
 
             best_match = None
+
             if reference:
                 radius = kwargs['search_radius'][procname]
+
                 if is_number(reference['ra'][0]) and is_number(reference['dec'][0]):
                     coords = SkyCoord(reference['ra'], reference['dec'], unit='deg')
                 else:
                     coords = np.array(parse_coord(reference['ra'], reference['dec']))
+
                 separation = coord.separation(coords).degree
                 match =  separation < radius.to_value('degree')
 
