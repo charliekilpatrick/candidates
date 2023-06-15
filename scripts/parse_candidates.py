@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import pickle
 import os
 import sys
@@ -178,7 +179,8 @@ def parse_telescope_candidates(sheet, spreadsheetId, Nmin=2):
     
     return(table)
 
-def get_lightcurve_file(candidate_url, typ='unforced', verbose=True):
+def get_lightcurve_file(candidate_url, typ='unforced', verbose=True,
+    checklcerror=True):
 
     base_url = candidate_url.split('.html')[0]
     cand_id = candidate_url.split('#')[-1]
@@ -202,7 +204,15 @@ def get_lightcurve_file(candidate_url, typ='unforced', verbose=True):
     else:
         auth = None
 
-    r = requests.get(lc_url, auth=auth)
+    try:
+        r = requests.get(lc_url, auth=auth)
+    except requests.exceptions.ConnectionError:
+        if checklcerror:
+            print(r.status_code)
+            raise Exception(f'ERROR: could not download lc file for {lc_url}')
+        else:
+            return(None)
+
 
     if verbose: print('Status code:',r.status_code)
 
@@ -258,7 +268,8 @@ def parse_candidate_data(table, checklcerror=True):
 
     for row in table:
         candidate = row['candidate']
-        lc = get_lightcurve_file(candidate, verbose=True)
+        lc = get_lightcurve_file(candidate, verbose=True, 
+            checklcerror=checklcerror)
 
         if lc is None and checklcerror:
             print(checklcerror)
@@ -277,7 +288,7 @@ def parse_candidate_data(table, checklcerror=True):
             cand_name = 'ANDICAMIR'
         elif 'andicam-ccd' in candidate.lower():
             cand_name = 'ANDICAMCCD'
-        elif 'step' in candidate.lower():
+        elif 'step' in candidate.lower() or '152.84.201.215' in candidate.lower():
             cand_name = 'STEP'
         else:
             raise Exception(f'ERROR: unrecognized telescope in {candidate}')
@@ -365,14 +376,14 @@ def add_options():
     import argparse
     parser = argparse.ArgumentParser()
 
+    parser.add_argument("urlfile", type=str, default='',
+        help="An input file parseable by ascii.read with candidate ID URLs.")
     parser.add_argument("--sheets", nargs='+', type=str, default=None, 
         help="List of google spreadsheet IDs from which to grab candidates.")
     parser.add_argument("--gsheets-token-file", type=str, default='',
         help="A file containing the google sheets token needed for API.")
     parser.add_argument("--Nmin","--Nmin-sniff", type=int, default=2,
         help="Minimum number of people to sniff a source to elevate to candidate.")
-    parser.add_argument("--url-file", type=str, default='',
-        help="An input file parseable by ascii.read with candidate ID URLs.")
     parser.add_argument("--no-lc-error", default=False, action='store_true',
         help="Ignore errors from failure to download a light curve file.")
     parser.add_argument("--outfile", default='candidates.csv', type=str,
@@ -399,8 +410,9 @@ if __name__ == "__main__":
             else:
                 table = vstack([table, new])
 
-    elif args.url_file:
-        table = ascii.read(args.url_file)
+    elif args.urlfile:
+        table = ascii.read(args.urlfile)
+
         if 'webpage' in table.keys():
             table.rename_column('webpage', 'candidate')
     else:
