@@ -129,7 +129,7 @@ def parse_kwargs(args):
                 'meta': [],
                 'reference': None,
                 'reference_name': '',
-                'redo_reference': ['ps1dr2'],
+                'redo_reference': ['ps1dr2','gaia','astcheck'],
                 'yse': source_table,
                 'redo': redo,
                 # Filters to avoid for photometric analysis of GW candidates

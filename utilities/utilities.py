@@ -451,11 +451,11 @@ def check_ps1dr2(coord, *args, **kwargs):
     region = '{0} {1}'.format(coord.ra.degree, coord.dec.degree)
 
     from astroquery.mast import Catalogs
-    if True:
+    try:
         catalog_data = Catalogs.query_region(region, radius=radius,
-            catalog='Panstarrs',data_release='dr2',table='detection')
-    #except KeyError:
-    #    return(None)
+            catalog='Panstarrs',data_release='dr2', table='detection')
+    except KeyError:
+        return(None)
 
     # This masks for rows where the corresponding source was fit with PSFMODEL
     # i.e., the source was classified as point-like
@@ -779,7 +779,8 @@ def output_latex_table(table, **kwargs):
     varnams = ['name','ra','dec','prob','date','z','var','note']
 
     if '2d_probability' not in table.keys():
-        varnams.remove('prob')
+        if 'prob' in varnams:
+            varnams.remove('prob')
 
     table = add_name_len(table)
 
@@ -833,9 +834,6 @@ def output_latex_table(table, **kwargs):
 def output_candidate_table(table, **kwargs):
 
     varnams = ['name','note','url']
-
-    if '2d_probability' not in table.keys():
-        varnams.remove('prob')
 
     table = add_name_len(table)
 
@@ -1246,7 +1244,7 @@ def host_crossmatch(row, reference, radius=300.0 * u.arcsec,
 def format_proc(proc, upper=False):
     try:
         typname = proc.__name__.lower()
-        typname = typname.replace('check','')
+        typname = typname.replace('check_','')
         typname = typname.replace('get','')
         typname = typname.replace('_',' ')
         typname = typname.strip()
@@ -1257,8 +1255,7 @@ def format_proc(proc, upper=False):
 
 def add_z(table, ref, procname, add_type, **kwargs):
 
-    #redo = kwargs['redo']
-    redo = True
+    redo = kwargs['redo']
 
     # We need distance data for the host_crossmatch algorith, so add
     if 'dl' not in table.keys() or 'dl_err' not in table.keys():
@@ -1564,7 +1561,7 @@ def add_phot_masks(table, typ, **kwargs):
     return(table)
 
 def step_message(step_num, proc, kwargs):
-    msg_fmt = 'STEP {0: <3}: {1: <20} {2}'
+    msg_fmt = '\nSTEP {0: <3}: {1: <20} {2}'
 
     if step_num==0:
         msg = 'there are {curr:<4} viable candidates'
