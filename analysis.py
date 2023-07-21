@@ -11,6 +11,7 @@ if __name__=="__main__":
     steps = options.parse_steps(args)
 
     table = None ; masks = []
+    finished_steps = []
     for i,proc in enumerate(steps):
         table = util.add_data(table, proc, **kwargs)
 
@@ -26,6 +27,15 @@ if __name__=="__main__":
             subtable.write(outdatafile, format='ascii', overwrite=True)
 
         util.step_message(i, proc, util.get_kwargs(table, masks=masks))
+        finished_steps.append(util.format_proc(proc))
+
+        if 'time' in finished_steps and 'prob' in finished_steps:
+            if 'initmask' in table.meta.keys() and table.meta['initmask']:
+                continue
+            else:
+                tmask = (~table['time_mask']) & (~table['prob_mask'])
+                table = table[tmask]
+                table.meta['initmask']=True
 
     table.meta['use_masks']=masks
     if args.latex:

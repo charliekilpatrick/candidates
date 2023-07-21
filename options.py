@@ -25,6 +25,12 @@ def astcheck_dependency_check():
 
         raise Exception(m)
 
+def clean_astcheck():
+
+    for file in ['ELEMENTS.COMET','MPCORB.DAT','mpcorb.sof','ObsCodes.html']:
+        if os.path.exists(file):
+            os.remove(file)
+
 
 def add_constraints(args):
 
@@ -126,6 +132,7 @@ def parse_kwargs(args):
     constraints = add_constraints(args)
 
     kwargs = {'event': event,
+                'verbose': args.verbose,
                 'meta': [],
                 'reference': None,
                 'reference_name': '',
@@ -217,6 +224,7 @@ def parse_steps(args):
             out_steps.append(util.check_mpc)
         elif 'astcheck' in step:
             astcheck_dependency_check()
+            clean_astcheck()
             out_steps.append(util.check_astcheck)
         elif 'gaia' in step:
             out_steps.append(util.check_gaia)
@@ -318,6 +326,8 @@ def add_options():
     parser.add_argument("--obscode", default="304", type=str,
         help="Observatory code for astcheck functionality.  For a list, see "+\
         "https://minorplanetcenter.net//iau/lists/ObsCodes.html.")
+    parser.add_argument("--verbose", default=False, action='store_true',
+        help="Verbose output from candidate vetting methods.")
 
     args = parser.parse_args()
 

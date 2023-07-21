@@ -289,7 +289,8 @@ def check_yse(coord, *args, **kwargs):
     return(table)
 
 def search_legacy_files(coord, *args, radius=30 * u.arcsec,
-    base_dir='/data/Legacy/photoz'):
+    base_dir='/data/Legacy/photoz', **kwargs):
+
     ra = coord.ra.degree
     dec = coord.dec.degree
     rad = radius.to_value('arcsec') / 3600.
@@ -345,10 +346,11 @@ def search_legacy_files(coord, *args, radius=30 * u.arcsec,
     else:
         return(None)
 
-def get_ps1strm(coord, *args, radius=300 * u.arcsec, **kwargs):
+def get_ps1strm(coord, *args, radius=300 * u.arcsec, 
+    catalog_dir = '/data/PS1STRM/photoz', **kwargs):
 
     ra = coord.ra.degree ; dec = coord.dec.degree
-    if dec < -30.0:
+    if dec < -33.0:
         return(None)
 
     ra = '-'+str(coord.ra.degree)
@@ -357,7 +359,6 @@ def get_ps1strm(coord, *args, radius=300 * u.arcsec, **kwargs):
     else:
         dec = '-'+str(coord.dec.degree)
 
-    catalog_dir = '/data/PS1STRM/photoz'
     catalogs = sorted(glob.glob(os.path.join(catalog_dir, '*strm*')))
 
     limits = []
@@ -379,7 +380,8 @@ def get_ps1strm(coord, *args, radius=300 * u.arcsec, **kwargs):
 
     idx=0
     for lim in limits:
-        if (float(dec) > float(lim[0])) and (float(dec) < float(lim[1])):
+        if ((coord.dec.degree > float(lim[0])) and 
+            (coord.dec.degree < float(lim[1]))):
             break
         else:
             idx += 1
@@ -399,7 +401,9 @@ def get_ps1strm(coord, *args, radius=300 * u.arcsec, **kwargs):
     cmd += ' print}\''
     cmd += ' > {0}'.format(file)
 
+    if kwargs['verbose']: print(cmd)
     os.system(cmd)
+    if kwargs['verbose']: print('done')
 
     catnames = 'objID,uniquePspsOBid,raMean,decMean,l,b,class,prob_Galaxy,'+\
     'prob_Star,prob_QSO,extrapolation_Class,cellDistance_Class,cellID_Class,'+\
@@ -409,10 +413,11 @@ def get_ps1strm(coord, *args, radius=300 * u.arcsec, **kwargs):
 
     try:
         table = ascii.read(file, names=names)
-        if os.path.exists('tmp'): os.remove('tmp')
+        if kwargs['verbose']: print('table length:',len(table))
+        if os.path.exists(file): os.remove(file)
         return(table)
     except:
-        if os.path.exists('tmp'): os.remove('tmp')
+        if os.path.exists(file): os.remove(file)
         return(None)
 
 def get_css(ra, dec, radius):
@@ -453,13 +458,13 @@ def check_ps1dr2(coord, *args, **kwargs):
     from astroquery.mast import Catalogs
     try:
         catalog_data = Catalogs.query_region(region, radius=radius,
-            catalog='Panstarrs',data_release='dr2', table='detection')
+            catalog='Panstarrs',data_release='dr2', table='stack')
     except KeyError:
         return(None)
 
     # This masks for rows where the corresponding source was fit with PSFMODEL
     # i.e., the source was classified as point-like
-    mask = np.array([int(c['infoFlag'])%2==1 for c in catalog_data])
+    mask = np.array([int(c['objInfoFlag'])%2==1 for c in catalog_data])
     catalog_data = catalog_data[mask]
 
     catalog_data = sanitize_table(catalog_data, reformat_columns=True)
@@ -594,7 +599,8 @@ def get_2mass_redshift(coord, *args, radius=300*u.arcsec, **kwargs):
     return(result_table)
 
 
-def build_meta_table(table, typ, r=30.0 * u.arcsec):
+def build_meta_table(table, typ, r=30.0 * u.arcsec, **kwargs):
+    
     methods={'legacy': search_legacy_files, 'ps1strm': get_ps1strm,
         'spec': search_spectroscopic_redshift, '2mpz': get_2mass_redshift}
 
@@ -612,9 +618,9 @@ def build_meta_table(table, typ, r=30.0 * u.arcsec):
         coord = parse_coord(row['ra'], row['dec'])
 
         if not meta_table:
-            meta_table = methods[typ](coord, radius=r)
+            meta_table = methods[typ](coord, radius=r, **kwargs)
         else:
-            subtable = methods[typ](coord, radius=r)
+            subtable = methods[typ](coord, radius=r, **kwargs)
 
             if subtable and len(subtable)>0:
                 meta_table = vstack([subtable, meta_table])
@@ -652,7 +658,7 @@ def format_redshift(row, **kwargs):
         return(out)
 
     if (('mpc_mask' in row.colnames and row['mpc_mask']) or
-        ('astcheck_mask' in row.colnames and row['astchec_mask'])):
+        ('astcheck_mask' in row.colnames and row['astcheck_mask'])):
         return('--')
 
     if row[use_name]!='--':
@@ -797,6 +803,7 @@ def output_latex_table(table, **kwargs):
         mask = ~table['prob_mask'] & ~table['time_mask']
         table = table[mask]
 
+    table.sort('discovery_date')
     all_data = []
     for row in table:
 
@@ -850,6 +857,7 @@ def output_candidate_table(table, **kwargs):
         mask = ~table['prob_mask'] & ~table['time_mask']
         table = table[mask]
 
+    table.sort('discovery_date')
     all_data = []
     for row in table:
 
@@ -1089,6 +1097,8 @@ def import_candidates(table, **kwargs):
                     data.append(orig_table[mask][0][varname])
                 table.add_column(Column(data, name=varname))
 
+    mask = table['classification']!='--'
+    table = table[mask]
 
     return(table)
 
@@ -1303,7 +1313,7 @@ def check_redshift(table, **kwargs):
     for procname in kwargs['redshift']['methods']:
 
         m='\tREDSHIFT: {proc}'
-        print(m.format(proc=procname.upper()))
+        if kwargs['verbose']: print(m.format(proc=procname.upper()))
 
         method = 'crossmatch'
 
@@ -1313,7 +1323,7 @@ def check_redshift(table, **kwargs):
             reference = sanitize_table(reference, reformat_columns=True)
         else:
             reference = build_meta_table(table, procname,
-                r=kwargs['search_radius']['galaxy'])
+                r=kwargs['search_radius']['galaxy'], **kwargs)
             if reference is not None:
                 reference = sanitize_table(reference, reformat_columns=True)
                 reference.write(kwargs[procname], format='ascii', overwrite=True)
@@ -1353,7 +1363,7 @@ def add_data(table, proc, **kwargs):
                 reftable = ascii.read(kwargs['reference_name'])
             else:
                 radius = kwargs['search']
-                reftable = build_meta_table(table, proc, r=radius)
+                reftable = build_meta_table(table, proc, r=radius, **kwargs)
                 reftable.write(kwargs['reference_name'], overwrite=True,
                     format='ascii')
 
@@ -1415,7 +1425,10 @@ def add_data(table, proc, **kwargs):
 
         coldata = list(map(list, zip(*coldata)))
         for i,col in enumerate(['_mask','','_ra','_dec']):
-            table.add_column(Column(coldata[i], name=procname+col))
+            colname = procname+col
+            if colname in table.keys():
+                table.remove_column(colname)
+            table.add_column(Column(coldata[i], name=colname))
 
     table = sanitize_table(table)
 
@@ -1801,16 +1814,17 @@ def add_phot_data(table, photdata, output_phot='photlist.dat', **kwargs):
                         '6': 'Swope', '3': 'Swope', '4': 'Swope',
                         '--': 'Other','77':'ZTF'}
 
+        rel_time = kwargs['alert_time'].mjd
         for data_point in photometry:
             if np.isnan(float(data_point['magerr'])):
-                        continue
+                continue
             if (not np.isnan(data_point['magerr'])
                 and 'nan' not in str(data_point['magerr'])
-                and Time(data_point['obsdate']).mjd>58709.00
+                and Time(data_point['obsdate']).mjd>rel_time-10.0
                 and str(data_point['band_id'])!='11'
                 and str(data_point['band_id'])!='118'
                 and str(data_point['band_id'])!='117'
-                and Time(data_point['obsdate']).mjd<58757.00):
+                and Time(data_point['obsdate']).mjd<rel_time+30.0):
                 pfilt = data_point['filter'].replace('p','')
                 band_name = '--'
                 if str(data_point['band_id']) in band_id_dict.keys():
@@ -1824,7 +1838,9 @@ def add_phot_data(table, photdata, output_phot='photlist.dat', **kwargs):
                 outline = '{0} {1} {2} {3} {4} {5} {6}'
                 outline = outline.format(name, mjd_str, pfilt,
                     mag_str, magerr_str, band_name, band_id_str)
-                print(outline)
+                
+                if kwargs['verbose']: print(outline)
+                
                 if output_phot:
                     output_phot_file.write(outline+'\n')
 
