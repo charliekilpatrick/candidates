@@ -1097,8 +1097,9 @@ def import_candidates(table, **kwargs):
                     data.append(orig_table[mask][0][varname])
                 table.add_column(Column(data, name=varname))
 
-    mask = table['classification']!='--'
-    table = table[mask]
+    if 'classification' in table.keys():
+        mask = table['classification']!='--'
+        table = table[mask]
 
     return(table)
 

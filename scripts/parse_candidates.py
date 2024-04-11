@@ -188,7 +188,10 @@ def get_lightcurve_file(candidate_url, typ='unforced', verbose=True,
     lc_url = f'{base_url}_cand{cand_id}.{typ}.difflc.txt'
     lc_url = lc_url.replace(' ','')
 
-    if 'http://' in lc_url: lc_url=lc_url.replace('http://','https://')
+    if ('http://' in lc_url and 
+        'lattes' not in lc_url and
+        '152.84.201.215' not in lc_url): 
+        lc_url=lc_url.replace('http://','https://')
     if not lc_url.startswith('http'): lc_url = 'http://'+lc_url
 
     # Fix issue with index.html appearing in some STEP candidates
@@ -199,6 +202,10 @@ def get_lightcurve_file(candidate_url, typ='unforced', verbose=True,
     if verbose: print(f'Trying to get: {lc_url}')
 
     if 'ziggy' in lc_url:
+        if ('ZIGGY_USER' not in os.environ.keys() or
+            'ZIGGY_PASSWORD' not in os.environ.keys()):
+            raise Exception('ERROR: add the ZIGGY_USER and ZIGGY_PASSWORD '+\
+                'variables to your environment and run again.')
         auth = HTTPBasicAuth(os.environ['ZIGGY_USER'], 
             os.environ['ZIGGY_PASSWORD'])
     else:
@@ -289,6 +296,8 @@ def parse_candidate_data(table, checklcerror=True):
         elif 'andicam-ccd' in candidate.lower():
             cand_name = 'ANDICAMCCD'
         elif 'step' in candidate.lower() or '152.84.201.215' in candidate.lower():
+            cand_name = 'STEP'
+        elif 'lattes' in candidate.lower():
             cand_name = 'STEP'
         else:
             raise Exception(f'ERROR: unrecognized telescope in {candidate}')
